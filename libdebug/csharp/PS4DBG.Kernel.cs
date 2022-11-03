@@ -1,18 +1,11 @@
 using System;
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 
 namespace libdebug
 {
     public partial class PS4DBG
     {
-        // kernel
-        //packet sizes
-        //send size
-        private const int CMD_KERN_READ_PACKET_SIZE = 12;
-        private const int CMD_KERN_WRITE_PACKET_SIZE = 12;
-        //receive size
-        private const int KERN_BASE_SIZE = 8;
-
-
         /// <summary>
         /// Get kernel base address
         /// </summary>
@@ -23,7 +16,10 @@ namespace libdebug
 
             SendCMDPacket(CMDS.CMD_KERN_BASE, 0);
             CheckStatus();
-            return BitConverter.ToUInt64(ReceiveData(KERN_BASE_SIZE), 0);
+
+            byte[] buffer = new byte[KERN_BASE_SIZE];
+            ReceiveData(buffer, KERN_BASE_SIZE);
+            return BinaryPrimitives.ReadUInt64LittleEndian(buffer);
         }
 
         /// <summary>
@@ -32,13 +28,14 @@ namespace libdebug
         /// <param name="address">Memory address</param>
         /// <param name="length">Data length</param>
         /// <returns></returns>
-        public byte[] KernelReadMemory(ulong address, int length)
+        public void KernelReadMemory(byte[] buffer, int length, ulong address)
         {
             CheckConnected();
 
             SendCMDPacket(CMDS.CMD_KERN_READ, CMD_KERN_READ_PACKET_SIZE, address, length);
             CheckStatus();
-            return ReceiveData(length);
+
+            ReceiveData(buffer, length);
         }
 
         /// <summary>

@@ -4,34 +4,13 @@ using System.IO;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Text;
+using System.Buffers.Binary;
+using System.Buffers;
 
 namespace libdebug
 {
     public partial class PS4DBG
     {
-        //proc
-        // packet sizes
-        // send size
-        private const int CMD_PROC_READ_PACKET_SIZE = 16;
-        private const int CMD_PROC_WRITE_PACKET_SIZE = 16;
-        private const int CMD_PROC_MAPS_PACKET_SIZE = 4;
-        private const int CMD_PROC_INSTALL_PACKET_SIZE = 4;
-        private const int CMD_PROC_CALL_PACKET_SIZE = 68;
-        private const int CMD_PROC_ELF_PACKET_SIZE = 8;
-        private const int CMD_PROC_PROTECT_PACKET_SIZE = 20;
-        private const int CMD_PROC_SCAN_PACKET_SIZE = 10;
-        private const int CMD_PROC_INFO_PACKET_SIZE = 4;
-        private const int CMD_PROC_ALLOC_PACKET_SIZE = 8;
-        private const int CMD_PROC_FREE_PACKET_SIZE = 16;
-        // receive size
-        private const int PROC_LIST_ENTRY_SIZE = 36;
-        private const int PROC_MAP_ENTRY_SIZE = 58;
-        private const int PROC_INSTALL_SIZE = 8;
-        private const int PROC_CALL_SIZE = 12;
-        private const int PROC_PROC_INFO_SIZE = 188;
-        private const int PROC_ALLOC_SIZE = 8;
-    
-
         /// <summary>
         /// Get current process list
         /// </summary>
@@ -44,40 +23,45 @@ namespace libdebug
             CheckStatus();
 
             // recv count
-            byte[] bytes = new byte[4];
-            sock.Receive(bytes, 4, SocketFlags.None);
-            int number = BitConverter.ToInt32(bytes, 0);
+            Span<byte> bytes = stackalloc byte[4];
+            _socket.Receive(bytes, SocketFlags.None);
+            int procCount = BinaryPrimitives.ReadInt32LittleEndian(bytes);
 
             // recv data
-            byte[] data = ReceiveData(number * PROC_LIST_ENTRY_SIZE);
+            byte[] data = ArrayPool<byte>.Shared.Rent(procCount * PROC_LIST_ENTRY_SIZE);
+            ReceiveData(data, procCount * PROC_LIST_ENTRY_SIZE);
 
             // parse data
-            string[] names = new string[number];
-            int[] pids = new int[number];
-            for (int i = 0; i < number; i++)
+            string[] names = new string[procCount];
+            int[] pids = new int[procCount];
+            for (int i = 0; i < procCount; i++)
             {
                 int offset = i * PROC_LIST_ENTRY_SIZE;
-                names[i] = ConvertASCII(data, offset);
-                pids[i] = BitConverter.ToInt32(data, offset + 32);
+                names[i] = Utils.ReadNullTerminated(data, offset);
+                pids[i] = BinaryPrimitives.ReadInt32LittleEndian(data[0x20..]);
             }
 
-            return new ProcessList(number, names, pids);
+            ArrayPool<byte>.Shared.Return(data);
+
+            return new ProcessList(procCount, names, pids);
         }
 
         /// <summary>
         /// Read memory
         /// </summary>
+        /// <param name="buffer">Input buffer to fill bytes with</param>
         /// <param name="pid">Process ID</param>
         /// <param name="address">Memory address</param>
         /// <param name="length">Data length</param>
         /// <returns></returns>
-        public byte[] ReadMemory(int pid, ulong address, int length)
+        public void ReadMemory(byte[] buffer, int pid, ulong address, int length)
         {
             CheckConnected();
 
             SendCMDPacket(CMDS.CMD_PROC_READ, CMD_PROC_READ_PACKET_SIZE, pid, address, length);
             CheckStatus();
-            return ReceiveData(length);
+
+            ReceiveData(buffer, length);
         }
 
         /// <summary>
@@ -109,12 +93,12 @@ namespace libdebug
             CheckStatus();
 
             // recv count
-            byte[] bnumber = new byte[4];
-            sock.Receive(bnumber, 4, SocketFlags.None);
-            int number = BitConverter.ToInt32(bnumber, 0);
+            Span<byte> bnumber = stackalloc byte[4];
+            _socket.Receive(bnumber, SocketFlags.None);
+            int number = BinaryPrimitives.ReadInt32LittleEndian(bnumber);
 
             // recv data
-            byte[] data = ReceiveData(number * PROC_MAP_ENTRY_SIZE);
+            byte[] data = ArrayPool<byte>.Shared.Rent(number * PROC_MAP_ENTRY_SIZE);
 
             // parse data
             MemoryEntry[] entries = new MemoryEntry[number];
@@ -123,14 +107,15 @@ namespace libdebug
                 int offset = i * PROC_MAP_ENTRY_SIZE;
                 entries[i] = new MemoryEntry
                 {
-                    name = ConvertASCII(data, offset),
-                    start = BitConverter.ToUInt64(data, offset + 32),
-                    end = BitConverter.ToUInt64(data, offset + 40),
-                    offset = BitConverter.ToUInt64(data, offset + 48),
-                    prot = BitConverter.ToUInt16(data, offset + 56)
+                    Name = Utils.ReadNullTerminated(data, offset),
+                    Start = BitConverter.ToUInt64(data, offset + 32),
+                    End = BitConverter.ToUInt64(data, offset + 40),
+                    Offset = BitConverter.ToUInt64(data, offset + 48),
+                    Prot = BitConverter.ToUInt16(data, offset + 56)
                 };
-
             }
+
+            ArrayPool<byte>.Shared.Return(data);
 
             return new ProcessMap(pid, entries);
         }
@@ -147,7 +132,9 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_PROC_INTALL, CMD_PROC_INSTALL_PACKET_SIZE, pid);
             CheckStatus();
 
-            return BitConverter.ToUInt64(ReceiveData(PROC_INSTALL_SIZE), 0);
+            byte[] buffer = new byte[PROC_INSTALL_SIZE];
+            ReceiveData(buffer, PROC_INSTALL_SIZE);
+            return BinaryPrimitives.ReadUInt64LittleEndian(buffer);
         }
 
         /// <summary>
@@ -165,11 +152,11 @@ namespace libdebug
             // need to do this in a custom format
             CMDPacket packet = new CMDPacket
             {
-                magic = CMD_PACKET_MAGIC,
-                cmd = (uint) CMDS.CMD_PROC_CALL,
-                datalen = (uint) CMD_PROC_CALL_PACKET_SIZE
+                Magic = CMD_PACKET_MAGIC,
+                Command = (uint) CMDS.CMD_PROC_CALL,
+                DataLength = CMD_PROC_CALL_PACKET_SIZE
             };
-            SendData(GetBytesFromObject(packet), CMD_PACKET_SIZE);
+            SendData(Utils.GetBytesFromObject(packet), CMD_PACKET_SIZE);
 
             MemoryStream rs = new MemoryStream();
             rs.Write(BitConverter.GetBytes(pid), 0, sizeof(int));
@@ -273,22 +260,25 @@ namespace libdebug
 
             CheckStatus();
 
-            byte[] data = ReceiveData(PROC_CALL_SIZE);
-            return BitConverter.ToUInt64(data, 4);
+            byte[] data = new byte[PROC_CALL_SIZE];
+            ReceiveData(data, PROC_CALL_SIZE);
+
+            return BinaryPrimitives.ReadUInt64LittleEndian(data[4..]);
         }
 
         /// <summary>
         /// Load elf
         /// </summary>
         /// <param name="pid">Process ID</param>
-        /// <param name="elf">Elf</param>
-        public void LoadElf(int pid, byte[] elf)
+        /// <param name="elfBytes">Elf</param>
+        public void LoadElf(int pid, byte[] elfBytes)
         {
             CheckConnected();
 
-            SendCMDPacket(CMDS.CMD_PROC_ELF, CMD_PROC_ELF_PACKET_SIZE, pid, (uint)elf.Length);
+            SendCMDPacket(CMDS.CMD_PROC_ELF, CMD_PROC_ELF_PACKET_SIZE, pid, (uint)elfBytes.Length);
             CheckStatus();
-            SendData(elf, elf.Length);
+
+            SendData(elfBytes, elfBytes.Length);
             CheckStatus();
         }
 
@@ -300,38 +290,6 @@ namespace libdebug
         public void LoadElf(int pid, string filename)
         {
             LoadElf(pid, File.ReadAllBytes(filename));
-        }
-
-        public enum ScanValueType : byte
-        {
-            valTypeUInt8 = 0,
-            valTypeInt8,
-            valTypeUInt16,
-            valTypeInt16,
-            valTypeUInt32,
-            valTypeInt32,
-            valTypeUInt64,
-            valTypeInt64,
-            valTypeFloat,
-            valTypeDouble,
-            valTypeArrBytes,
-            valTypeString
-        }
-
-        public enum ScanCompareType : byte
-        {
-            ExactValue = 0,
-            FuzzyValue,
-            BiggerThan,
-            SmallerThan,
-            ValueBetween,
-            IncreasedValue,
-            IncreasedValueBy,
-            DecreasedValue,
-            DecreasedValueBy,
-            ChangedValue,
-            UnchangedValue,
-            UnknownInitialValue
         }
 
         public List<ulong> ScanProcess<T>(int pid, ScanCompareType compareType, T value, T extraValue = default)
@@ -449,21 +407,22 @@ namespace libdebug
             CheckStatus();
 
             // receive results
-            int save = sock.ReceiveTimeout;
-            sock.ReceiveTimeout = Int32.MaxValue;
+            int save = _socket.ReceiveTimeout;
+            _socket.ReceiveTimeout = int.MaxValue;
             List<ulong> results = new List<ulong>();
-            while(true)
+            byte[] buf = new byte[8];
+            
+            while (true)
             {
-                ulong result = BitConverter.ToUInt64(ReceiveData(sizeof(ulong)), 0);
-                if(result == 0xFFFFFFFFFFFFFFFF)
-                {
+                ReceiveData(buf, 8);
+                ulong result = BinaryPrimitives.ReadUInt64LittleEndian(buf);
+                if (result == 0xFFFFFFFFFFFFFFFF)
                     break;
-                }
 
                 results.Add(result);
             }
 
-            sock.ReceiveTimeout = save;
+            _socket.ReceiveTimeout = save;
 
             return results;
         }
@@ -496,8 +455,7 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_PROC_INFO, CMD_PROC_INFO_PACKET_SIZE, pid);
             CheckStatus();
 
-            byte[] data = ReceiveData(PROC_PROC_INFO_SIZE);
-            return (ProcessInfo)GetObjectFromBytes(data, typeof(ProcessInfo));
+            return ReceiveData<ProcessInfo>();
         }
 
         /// <summary>
@@ -512,7 +470,10 @@ namespace libdebug
 
             SendCMDPacket(CMDS.CMD_PROC_ALLOC, CMD_PROC_ALLOC_PACKET_SIZE, pid, length);
             CheckStatus();
-            return BitConverter.ToUInt64(ReceiveData(PROC_ALLOC_SIZE), 0);
+
+            byte[] buffer = new byte[PROC_ALLOC_SIZE];
+            ReceiveData(buffer, PROC_ALLOC_SIZE);
+            return BinaryPrimitives.ReadUInt64LittleEndian(buffer);
         }
 
         /// <summary>
@@ -530,25 +491,43 @@ namespace libdebug
             CheckStatus();
         }
 
+        /// <summary>
+        /// Reads memory for a provided type. Data will be marshalled if not <see cref="string"/> or <see cref="byte[]"/>.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="pid"></param>
+        /// <param name="address"></param>
+        /// <returns></returns>
+        /// <exception cref="NotSupportedException"></exception>
         public T ReadMemory<T>(int pid, ulong address)
         {
             if (typeof(T) == typeof(string))
             {
-                string str = "";
-                ulong i = 0;
+                StringBuilder sb = new StringBuilder(0x1000);
+                ulong offset = 0;
 
-                while (true)
+                const int bufferSize = 0x500;
+                byte[] strBuffer = ArrayPool<byte>.Shared.Rent(0x500); // To be safe
+
+                bool done = false;
+                while (!done)
                 {
-                    byte value = ReadMemory(pid, address + i, sizeof(byte))[0];
-                    if (value == 0)
+                    ReadMemory(strBuffer, pid, address + offset, bufferSize);
+                    for (var i = 0; i < strBuffer.Length; i++)
                     {
-                        break;
+                        if (strBuffer[i] == 0)
+                        {
+                            done = true;
+                            break;
+                        }
+
+                        sb.Append((char)strBuffer[i]);
                     }
-                    str += Convert.ToChar(value);
-                    i++;
+
+                    offset += bufferSize;
                 }
 
-                return (T)(object)str;
+                return (T)(object)sb.ToString();
             }
             
             if (typeof(T) == typeof(byte[]))
@@ -556,9 +535,18 @@ namespace libdebug
                 throw new NotSupportedException("byte arrays are not supported, use ReadMemory(int pid, ulong address, int size)");
             }
 
-            return (T)GetObjectFromBytes(ReadMemory(pid, address, Marshal.SizeOf(typeof(T))), typeof(T));
+            byte[] buffer = new byte[Marshal.SizeOf(typeof(T))];
+            ReadMemory(buffer, pid, address, buffer.Length);
+            return Utils.GetObjectFromBytes<T>(buffer);
         }
 
+        /// <summary>
+        /// Writes memory into the provided process. Data will be marshalled if not <see cref="string"/> or <see cref="byte[]"/>.
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="pid"></param>
+        /// <param name="address"></param>
+        /// <param name="value"></param>
         public void WriteMemory<T>(int pid, ulong address, T value)
         {
             if (typeof(T) == typeof(string))
@@ -573,7 +561,7 @@ namespace libdebug
                 return;
             }
             
-            WriteMemory(pid, address, GetBytesFromObject(value));
+            WriteMemory(pid, address, Utils.GetBytesFromObject(value));
         }
     }
 }

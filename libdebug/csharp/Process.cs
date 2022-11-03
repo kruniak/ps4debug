@@ -4,8 +4,8 @@ namespace libdebug
 {
     public class Process
     {
-        public string name;
-        public int pid;
+        public string Name;
+        public int Pid;
 
         /// <summary>
         /// Initializes Process class
@@ -15,18 +15,18 @@ namespace libdebug
         /// <returns></returns>
         public Process(string name, int pid)
         {
-            this.name = name;
-            this.pid = pid;
+            this.Name = name;
+            this.Pid = pid;
         }
         public override string ToString()
         {
-            return $"[{pid}] {name}";
+            return $"[{Pid}] {Name}";
         }
     }
 
     public class ProcessList
     {
-        public Process[] processes;
+        public Process[] Processes { get; private set; }
 
         /// <summary>
         /// Initializes ProcessList class
@@ -37,10 +37,10 @@ namespace libdebug
         /// <returns></returns>
         public ProcessList(int number, string[] names, int[] pids)
         {
-            processes = new Process[number];
+            Processes = new Process[number];
             for (int i = 0; i < number; i++)
             {
-                processes[i] = new Process(names[i], pids[i]);
+                Processes[i] = new Process(names[i], pids[i]);
             }
         }
 
@@ -52,18 +52,18 @@ namespace libdebug
         /// <returns></returns>
         public Process FindProcess(string name, bool contains = false)
         {
-            foreach (Process p in processes)
+            foreach (Process p in Processes)
             {
                 if (contains)
                 {
-                    if (p.name.Contains(name))
+                    if (p.Name.Contains(name))
                     {
                         return p;
                     }
                 }
                 else
                 {
-                    if (p.name == name)
+                    if (p.Name == name)
                     {
                         return p;
                     }
@@ -76,17 +76,17 @@ namespace libdebug
 
     public class MemoryEntry
     {
-        public string name;
-        public ulong start;
-        public ulong end;
-        public ulong offset;
-        public uint prot;
+        public string Name;
+        public ulong Start;
+        public ulong End;
+        public ulong Offset;
+        public uint Prot;
     }
 
     public class ProcessMap
     {
-        public int pid;
-        public MemoryEntry[] entries;
+        public int Pid { get; }
+        public MemoryEntry[] Entries { get; private set; }
 
         /// <summary>
         /// Initializes ProcessMap class with memory entries and process ID
@@ -96,8 +96,8 @@ namespace libdebug
         /// <returns></returns>
         public ProcessMap(int pid, MemoryEntry[] entries)
         {
-            this.pid = pid;
-            this.entries = entries;
+            this.Pid = pid;
+            this.Entries = entries;
         }
 
         /// <summary>
@@ -108,18 +108,18 @@ namespace libdebug
         /// <returns></returns>
         public MemoryEntry FindEntry(string name, bool contains = false)
         {
-            foreach (MemoryEntry entry in entries)
+            foreach (MemoryEntry entry in Entries)
             {
                 if (contains)
                 {
-                    if (entry.name.Contains(name))
+                    if (entry.Name.Contains(name))
                     {
                         return entry;
                     }
                 }
                 else
                 {
-                    if (entry.name == name)
+                    if (entry.Name == name)
                     {
                         return entry;
                     }
@@ -136,9 +136,9 @@ namespace libdebug
         /// <returns></returns>
         public MemoryEntry FindEntry(ulong size)
         {
-            foreach (MemoryEntry entry in entries)
+            foreach (MemoryEntry entry in Entries)
             {
-                if ((entry.start - entry.end) == size)
+                if ((entry.Start - entry.End) == size)
                 {
                     return entry;
                 }
@@ -151,28 +151,28 @@ namespace libdebug
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi, Pack = 1)]
     public struct ProcessInfo
     {
-        public int pid;
+        public int Pid;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 40)]
-        public string name;
+        public string Name;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
-        public string path;
+        public string Path;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 16)]
-        public string titleid;
+        public string TitleId;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 64)]
-        public string contentid;
+        public string ContentId;
     }
 
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Ansi, Pack = 1)]
     public struct ThreadInfo
     {
-        public int pid;
-        public int priority;
+        public int Pid;
+        public int Priority;
 
         [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)]
-        public string name;
+        public string Name;
     }
 }

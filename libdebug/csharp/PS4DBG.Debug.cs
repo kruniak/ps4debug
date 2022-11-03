@@ -3,41 +3,13 @@ using System.Net;
 using System.Net.Sockets;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Buffers;
+using System.Buffers.Binary;
 
 namespace libdebug
 {
     public partial class PS4DBG
     {
-        //debug
-        // packet sizes
-        //send size
-        private const int CMD_DEBUG_ATTACH_PACKET_SIZE = 4;
-        private const int CMD_DEBUG_BREAKPT_PACKET_SIZE = 16;
-        private const int CMD_DEBUG_WATCHPT_PACKET_SIZE = 24;
-        private const int CMD_DEBUG_STOPTHR_PACKET_SIZE = 4;
-        private const int CMD_DEBUG_RESUMETHR_PACKET_SIZE = 4;
-        private const int CMD_DEBUG_GETREGS_PACKET_SIZE = 4;
-        private const int CMD_DEBUG_SETREGS_PACKET_SIZE = 8;
-        private const int CMD_DEBUG_STOPGO_PACKET_SIZE = 4;
-        private const int CMD_DEBUG_THRINFO_PACKET_SIZE = 4;
-        //receive size
-        private const int DEBUG_INTERRUPT_SIZE = 0x4A0;
-        private const int DEBUG_THRINFO_SIZE = 40;
-        private const int DEBUG_REGS_SIZE = 0xB0;
-        private const int DEBUG_FPREGS_SIZE = 0x340;
-        private const int DEBUG_DBGREGS_SIZE = 0x80;
-
-        [StructLayout(LayoutKind.Sequential, Pack = 1)]
-        public struct DebuggerInterruptPacket
-        {
-            public uint lwpid;
-            public uint status;
-            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 40)]
-            public string tdname;
-            public regs reg64;
-            public fpregs savefpu;
-            public dbregs dbreg64;
-        }
         /// <summary>
         /// Debugger interrupt callback
         /// </summary>
@@ -47,7 +19,7 @@ namespace libdebug
         /// <param name="regs">Registers</param>
         /// <param name="fpregs">Floating point registers</param>
         /// <param name="dbregs">Debug registers</param>
-        public delegate void DebuggerInterruptCallback(uint lwpid, uint status, string tdname, regs regs, fpregs fpregs, dbregs dbregs);
+        public delegate void DebuggerInterruptCallback(uint lwpid, uint status, string tdname, GeneralRegisters regs, FloatingPointRegisters fpregs, DebugRegisters dbregs);
         private void DebuggerThread(object obj)
         {
             DebuggerInterruptCallback callback = (DebuggerInterruptCallback)obj;
@@ -67,16 +39,16 @@ namespace libdebug
             cl.NoDelay = true;
             cl.Blocking = false;
 
+            byte[] debugInterruptBuffer = new byte[DEBUG_INTERRUPT_SIZE];
             while (IsDebugging)
             {
                 if (cl.Available == DEBUG_INTERRUPT_SIZE)
                 {
-                    byte[] data = new byte[DEBUG_INTERRUPT_SIZE];
-                    int bytes = cl.Receive(data, DEBUG_INTERRUPT_SIZE, SocketFlags.None);
+                    int bytes = cl.Receive(debugInterruptBuffer, DEBUG_INTERRUPT_SIZE, SocketFlags.None);
                     if (bytes == DEBUG_INTERRUPT_SIZE)
                     {
-                        DebuggerInterruptPacket packet = (DebuggerInterruptPacket)GetObjectFromBytes(data, typeof(DebuggerInterruptPacket));
-                        callback(packet.lwpid, packet.status, packet.tdname, packet.reg64, packet.savefpu, packet.dbreg64);
+                        DebuggerInterruptPacket packet = Utils.GetObjectFromBytes<DebuggerInterruptPacket>(debugInterruptBuffer);
+                        callback(packet.LWPid, packet.Status, packet.ThreadName, packet.Registers, packet.FloatingRegisters, packet.DebugRegisters);
                     }
                 }
 
@@ -85,6 +57,7 @@ namespace libdebug
 
             server.Close();
         }
+
         /// <summary>
         /// Attach the debugger
         /// </summary>
@@ -95,15 +68,15 @@ namespace libdebug
         {
             CheckConnected();
 
-            if (IsDebugging || debugThread != null)
+            if (IsDebugging || _debugThread != null)
             {
                 throw new Exception("libdbg: debugger already running?");
             }
 
             IsDebugging = false;
 
-            debugThread = new Thread(DebuggerThread) {IsBackground = true};
-            debugThread.Start(callback);
+            _debugThread = new Thread(DebuggerThread) {IsBackground = true};
+            _debugThread.Start(callback);
 
             // wait until server is started
             while (!IsDebugging)
@@ -126,12 +99,12 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_DEBUG_DETACH, 0);
             CheckStatus();
 
-            if (IsDebugging && debugThread != null)
+            if (IsDebugging && _debugThread != null)
             {
                 IsDebugging = false;
 
-                debugThread.Join();
-                debugThread = null;
+                _debugThread.Join();
+                _debugThread = null;
             }
         }
 
@@ -191,7 +164,7 @@ namespace libdebug
                 throw new Exception("libdbg: breakpoint index out of range");
             }
 
-            SendCMDPacket(CMDS.CMD_DEBUG_BREAKPT, CMD_DEBUG_BREAKPT_PACKET_SIZE, index, Convert.ToInt32(enabled), address);
+            SendCMDPacket(CMDS.CMD_DEBUG_BREAKPT, CMD_DEBUG_BREAKPT_PACKET_SIZE, index, enabled ? 1 : 0, address);
             CheckStatus();
         }
 
@@ -214,7 +187,7 @@ namespace libdebug
                 throw new Exception("libdbg: watchpoint index out of range");
             }
 
-            SendCMDPacket(CMDS.CMD_DEBUG_WATCHPT, CMD_DEBUG_WATCHPT_PACKET_SIZE, index, Convert.ToInt32(enabled), (uint)length, (uint)breaktype, address);
+            SendCMDPacket(CMDS.CMD_DEBUG_WATCHPT, CMD_DEBUG_WATCHPT_PACKET_SIZE, index, enabled ? 1 : 0, (uint)length, (uint)breaktype, address);
             CheckStatus();
         }
 
@@ -230,16 +203,19 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_DEBUG_THREADS, 0);
             CheckStatus();
 
-            byte[] data = new byte[sizeof(int)];
-            sock.Receive(data, sizeof(int), SocketFlags.None);
-            int number = BitConverter.ToInt32(data, 0);
+            Span<byte> data = stackalloc byte[4];
+            _socket.Receive(data, SocketFlags.None);
+            int number = BinaryPrimitives.ReadInt32LittleEndian(data);
 
-            byte[] threads = ReceiveData(number * sizeof(uint));
+            byte[] threads = ArrayPool<byte>.Shared.Rent(number * 4);
+            ReceiveData(threads, number * 4);
+
+            Span<uint> threadsIds = MemoryMarshal.Cast<byte, uint>(threads);
             uint[] thrlist = new uint[number];
             for (int i = 0; i < number; i++)
-            {
-                thrlist[i] = BitConverter.ToUInt32(threads, i * sizeof(uint));
-            }
+                thrlist[i] = threadsIds[i];
+
+            ArrayPool<byte>.Shared.Return(threads);
 
             return thrlist;
         }
@@ -257,7 +233,7 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_DEBUG_THRINFO, CMD_DEBUG_THRINFO_PACKET_SIZE, lwpid);
             CheckStatus();
 
-            return (ThreadInfo)GetObjectFromBytes(ReceiveData(DEBUG_THRINFO_SIZE), typeof(ThreadInfo));
+            return ReceiveData<ThreadInfo>();
         }
 
         /// <summary>
@@ -293,7 +269,7 @@ namespace libdebug
         /// </summary>
         /// <param name="lwpid">Thread id</param>
         /// <returns></returns>
-        public regs GetRegisters(uint lwpid)
+        public GeneralRegisters GetRegisters(uint lwpid)
         {
             CheckConnected();
             CheckDebugging();
@@ -301,7 +277,10 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_DEBUG_GETREGS, CMD_DEBUG_GETREGS_PACKET_SIZE, lwpid);
             CheckStatus();
 
-            return (regs)GetObjectFromBytes(ReceiveData(DEBUG_REGS_SIZE), typeof(regs));
+            // No marshalling needed
+            byte[] buffer = new byte[DEBUG_REGS_SIZE];
+            ReceiveData(buffer, DEBUG_REGS_SIZE);
+            return MemoryMarshal.Cast<byte, GeneralRegisters>(buffer)[0];
         }
 
         /// <summary>
@@ -310,14 +289,19 @@ namespace libdebug
         /// <param name="lwpid">Thread id</param>
         /// <param name="regs">Register data</param>
         /// <returns></returns>
-        public void SetRegisters(uint lwpid, regs regs)
+        public void SetRegisters(uint lwpid, GeneralRegisters regs)
         {
             CheckConnected();
             CheckDebugging();
 
             SendCMDPacket(CMDS.CMD_DEBUG_SETREGS, CMD_DEBUG_SETREGS_PACKET_SIZE, lwpid, DEBUG_REGS_SIZE);
             CheckStatus();
-            SendData(GetBytesFromObject(regs), DEBUG_REGS_SIZE);
+
+            // No marshalling needed
+            Span<GeneralRegisters> regSpan = MemoryMarshal.CreateSpan(ref regs, 1);
+            Span<byte> bytes = MemoryMarshal.Cast<GeneralRegisters, byte>(regSpan);
+            SendData(bytes, DEBUG_REGS_SIZE);
+
             CheckStatus();
         }
 
@@ -326,7 +310,7 @@ namespace libdebug
         /// </summary>
         /// <param name="lwpid">Thread id</param>
         /// <returns></returns>
-        public fpregs GetFloatRegisters(uint lwpid)
+        public FloatingPointRegisters GetFloatRegisters(uint lwpid)
         {
             CheckConnected();
             CheckDebugging();
@@ -334,7 +318,7 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_DEBUG_GETFPREGS, CMD_DEBUG_GETREGS_PACKET_SIZE, lwpid);
             CheckStatus();
 
-            return (fpregs)GetObjectFromBytes(ReceiveData(DEBUG_FPREGS_SIZE), typeof(fpregs));
+            return ReceiveData<FloatingPointRegisters>();
         }
 
         /// <summary>
@@ -343,23 +327,26 @@ namespace libdebug
         /// <param name="lwpid">Thread id</param>
         /// <param name="fpregs">Floating point register data</param>
         /// <returns></returns>
-        public void SetFloatRegisters(uint lwpid, fpregs fpregs)
+        public void SetFloatRegisters(uint lwpid, FloatingPointRegisters fpregs)
         {
             CheckConnected();
             CheckDebugging();
 
             SendCMDPacket(CMDS.CMD_DEBUG_SETFPREGS, CMD_DEBUG_SETREGS_PACKET_SIZE, lwpid, DEBUG_FPREGS_SIZE);
             CheckStatus();
-            SendData(GetBytesFromObject(fpregs), DEBUG_FPREGS_SIZE);
+
+            SendData(fpregs);
             CheckStatus();
         }
+
+       
 
         /// <summary>
         /// Get debug registers from thread
         /// </summary>
         /// <param name="lwpid">Thread id</param>
         /// <returns></returns>
-        public dbregs GetDebugRegisters(uint lwpid)
+        public DebugRegisters GetDebugRegisters(uint lwpid)
         {
             CheckConnected();
             CheckDebugging();
@@ -367,7 +354,10 @@ namespace libdebug
             SendCMDPacket(CMDS.CMD_DEBUG_GETDBGREGS, CMD_DEBUG_GETREGS_PACKET_SIZE, lwpid);
             CheckStatus();
 
-            return (dbregs)GetObjectFromBytes(ReceiveData(DEBUG_DBGREGS_SIZE), typeof(dbregs));
+            // No marshalling needed
+            byte[] buffer = new byte[DEBUG_REGS_SIZE];
+            ReceiveData(buffer, DEBUG_REGS_SIZE);
+            return MemoryMarshal.Cast<byte, DebugRegisters>(buffer)[0];
         }
 
         /// <summary>
@@ -376,14 +366,19 @@ namespace libdebug
         /// <param name="lwpid">Thread id</param>
         /// <param name="dbregs">debug register data</param>
         /// <returns></returns>
-        public void SetDebugRegisters(uint lwpid, dbregs dbregs)
+        public void SetDebugRegisters(uint lwpid, DebugRegisters dbregs)
         {
             CheckConnected();
             CheckDebugging();
 
             SendCMDPacket(CMDS.CMD_DEBUG_SETDBGREGS, CMD_DEBUG_SETREGS_PACKET_SIZE, lwpid, DEBUG_DBGREGS_SIZE);
             CheckStatus();
-            SendData(GetBytesFromObject(dbregs), DEBUG_DBGREGS_SIZE);
+
+            // No marshalling needed
+            Span<DebugRegisters> regSpan = MemoryMarshal.CreateSpan(ref dbregs, 1);
+            Span<byte> bytes = MemoryMarshal.Cast<DebugRegisters, byte>(regSpan);
+            SendData(bytes, DEBUG_DBGREGS_SIZE);
+
             CheckStatus();
         }
 

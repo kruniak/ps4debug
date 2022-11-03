@@ -1,49 +1,184 @@
 using System.Runtime.InteropServices;
 
+
 namespace libdebug
 {
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    public struct regs
+    public struct GeneralRegisters
     {
-        public ulong r_r15;
-        public ulong r_r14;
-        public ulong r_r13;
-        public ulong r_r12;
-        public ulong r_r11;
-        public ulong r_r10;
-        public ulong r_r9;
-        public ulong r_r8;
-        public ulong r_rdi;
-        public ulong r_rsi;
-        public ulong r_rbp;
-        public ulong r_rbx;
-        public ulong r_rdx;
-        public ulong r_rcx;
-        public ulong r_rax;
-        public uint r_trapno;
-        public ushort r_fs;
-        public ushort r_gs;
-        public uint r_err;
-        public ushort r_es;
-        public ushort r_ds;
-        public ulong r_rip;
-        public ulong r_cs;
-        public ulong r_rflags;
-        public ulong r_rsp;
-        public ulong r_ss;
+        /// <summary>
+        /// General purpose register - callee-saved 
+        /// </summary>
+        public ulong r15;
+
+        /// <summary>
+        /// General purpose register - callee-saved 
+        /// </summary>
+        public ulong r14;
+
+        /// <summary>
+        /// General purpose register - callee-saved 
+        /// </summary>
+        public ulong r13;
+
+        /// <summary>
+        /// General purpose register - callee-saved 
+        /// </summary>
+        public ulong r12;
+
+        /// <summary>
+        /// General purpose register - temporary 
+        /// </summary>
+        public ulong r11;
+
+        /// <summary>
+        /// General purpose register - temporary 
+        /// </summary>
+        public ulong r10;
+
+        /// <summary>
+        /// General purpose register - argument passing for function calls 
+        /// </summary>
+        public ulong r9;
+
+        /// <summary>
+        /// General purpose register - argument passing for function calls 
+        /// </summary>
+        public ulong r8;
+
+        /// <summary>
+        /// General purpose register - argument passing for function calls 
+        /// </summary>
+        public ulong rdi;
+
+        /// <summary>
+        /// General purpose register - argument passing for function calls 
+        /// </summary>
+        public ulong rsi;
+
+        /// <summary>
+        /// General purpose register - stack management/base frame pointer (meant for stack frames)
+        /// </summary>
+        public ulong rbp;
+
+        /// <summary>
+        /// General purpose register - callee-saved
+        /// </summary>
+        public ulong rbx;
+
+        /// <summary>
+        /// General purpose register - argument passing for function calls 
+        /// </summary>
+        public ulong rdx;
+
+        /// <summary>
+        /// General purpose register - argument passing for function calls 
+        /// </summary>
+        public ulong rcx;
+
+        /// <summary>
+        /// General purpose register - argument passing for function calls 
+        /// </summary>
+        public ulong rax;
+
+        /// <summary>
+        /// Exception vector number
+        /// </summary>
+        public uint trapno;
+
+        /// <summary>
+        /// General-purpose Segment
+        /// </summary>
+        public ushort fs;
+
+        /// <summary>
+        /// General-purpose Segment
+        /// </summary>
+        public ushort gs;
+
+        /// <summary>
+        /// Exception error code register
+        /// </summary>
+        public uint err;
+
+        /// <summary>
+        /// Extra Segment register
+        /// </summary>
+        public ushort es;
+
+        /// <summary>
+        /// Data segment register
+        /// </summary>
+        public ushort ds;
+
+        /// <summary>
+        /// Instruction Pointer
+        /// </summary>
+        public ulong rip;
+
+        /// <summary>
+        /// Code segment register
+        /// </summary>
+        public ulong cs;
+        
+        /// <summary>
+        /// Flags register
+        /// </summary>
+        public ulong rflags;
+
+        /// <summary>
+        /// Stack pointer register
+        /// </summary>
+        public ulong rsp;
+
+        /// <summary>
+        /// Stack segment register
+        /// </summary>
+        public ulong ss;
     }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct envxmm
     {
-        public ushort en_cw; /* control word (16bits) */
-        public ushort en_sw; /* status word (16bits) */
-        public byte en_tw; /* tag word (8bits) */
+        /// <summary>
+        /// Control Word (16 bits)
+        /// </summary>
+        public ushort en_cw;
+
+        /// <summary>
+        /// Status word (16 bits)
+        /// </summary>
+        public ushort en_sw;
+
+        /// <summary>
+        /// Tag word (8 bits)
+        /// </summary>
+        public byte en_tw;
         public byte en_zero;
-        public ushort en_opcode; /* opcode last executed (11 bits ) */
-        public ulong en_rip; /* floating point instruction pointer */
-        public ulong en_rdp; /* floating operand pointer */
-        public uint en_mxcsr; /* SSE sontorol/status register */
+
+        /// <summary>
+        /// Opcode Last Executed (11 bits)
+        /// </summary>
+        public ushort en_opcode;
+
+        /// <summary>
+        /// Floating point instruction pointer
+        /// </summary>
+        public ulong en_rip;
+
+        /// <summary>
+        /// Floating Operand Pointer
+        /// </summary>
+        public ulong en_rdp;
+
+        /// <summary>
+        /// SSE control/status register
+        /// </summary>
+        public uint en_mxcsr;
+
+        /// <summary>
+        /// Valid bits in mxcsr
+        /// </summary>
         public uint en_mxcsr_mask; /* valid bits in mxcsr */
     }
 
@@ -90,20 +225,24 @@ namespace libdebug
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 64)]
-    public struct fpregs
+    public struct FloatingPointRegisters
     {
         public envxmm svn_env;
+
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 8)]
         public acc[] sv_fp;
+
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 16)]
         public xmmacc[] sv_xmm;
+
         [MarshalAs(UnmanagedType.ByValArray, SizeConst = 96)]
         private byte[] sv_pad;
+
         public savefpu_xstate sv_xstate;
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 1)]
-    public struct dbregs
+    public struct DebugRegisters
     {
         public ulong dr0;
         public ulong dr1;
@@ -122,4 +261,5 @@ namespace libdebug
         public ulong dr14;
         public ulong dr15;
     }
+
 }

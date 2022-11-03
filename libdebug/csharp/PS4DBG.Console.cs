@@ -1,16 +1,12 @@
+using System;
 using System.Text;
+using System.Runtime.InteropServices;
+using System.Buffers;
 
 namespace libdebug
 {
     public partial class PS4DBG
     {   
-        //console
-        // packet sizes
-        // send size
-        private const int CMD_CONSOLE_PRINT_PACKET_SIZE = 4;
-        private const int CMD_CONSOLE_NOTIFY_PACKET_SIZE = 8;
-
-
         // console
         // note: the disconnect command actually uses the console api to end the connection
         /// <summary>
@@ -31,10 +27,15 @@ namespace libdebug
         {
             CheckConnected();
 
-            string raw = str + "\0";
+            int byteCnt = Encoding.ASCII.GetByteCount(str);
+            byte[] strBuffer = ArrayPool<byte>.Shared.Rent(byteCnt + 1);
+            Encoding.ASCII.GetBytes(str, strBuffer);
+            strBuffer[byteCnt] = (byte)'\0';
 
-            SendCMDPacket(CMDS.CMD_CONSOLE_PRINT, CMD_CONSOLE_PRINT_PACKET_SIZE, raw.Length);
-            SendData(Encoding.ASCII.GetBytes(raw), raw.Length);
+            SendCMDPacket(CMDS.CMD_CONSOLE_PRINT, CMD_CONSOLE_PRINT_PACKET_SIZE, byteCnt + 1);
+            SendData(strBuffer, byteCnt + 1);
+
+            ArrayPool<byte>.Shared.Return(strBuffer);
             CheckStatus();
         }
 
@@ -45,10 +46,15 @@ namespace libdebug
         {
             CheckConnected();
 
-            string raw = message + "\0";
+            int byteCnt = Encoding.ASCII.GetByteCount(message);
+            byte[] msgBuffer = ArrayPool<byte>.Shared.Rent(byteCnt + 1);
+            Encoding.ASCII.GetBytes(message, msgBuffer);
+            msgBuffer[byteCnt] = (byte)'\0';
 
-            SendCMDPacket(CMDS.CMD_CONSOLE_NOTIFY, CMD_CONSOLE_NOTIFY_PACKET_SIZE, messageType, raw.Length);
-            SendData(Encoding.ASCII.GetBytes(raw), raw.Length);
+            SendCMDPacket(CMDS.CMD_CONSOLE_NOTIFY, CMD_CONSOLE_NOTIFY_PACKET_SIZE, messageType, byteCnt + 1);
+            SendData(msgBuffer, byteCnt + 1);
+
+            ArrayPool<byte>.Shared.Return(msgBuffer);
             CheckStatus();
         }
 
